@@ -1,5 +1,7 @@
 # Accounts Microservice — DevOps Capstone
 
+[![CI Build](https://github.com/kushagrrrra/devops-capstone-project/actions/workflows/ci-build.yaml/badge.svg)](https://github.com/kushagrrrra/devops-capstone-project/actions/workflows/ci-build.yaml)
+
 A RESTful microservice for managing customer accounts, built with Python and Flask, and delivered through a full DevOps workflow: agile planning, test-driven development, continuous integration with GitHub Actions, security hardening, containerization with Docker, deployment to Kubernetes, and a continuous delivery pipeline with Tekton.
 
 ## Features
@@ -71,6 +73,31 @@ curl -i -X DELETE http://localhost:8080/accounts/1
 | 404 Not Found | no account with that id |
 | 405 Method Not Allowed | unsupported method on a route |
 | 415 Unsupported Media Type | body is not `application/json` |
+
+## Security
+
+Every response carries these headers, set by Flask-Talisman in `service/common/security.py`:
+
+| Header | Value | Protects against |
+|--------|-------|------------------|
+| Content-Security-Policy | `default-src 'self'; object-src 'none'` | injected scripts and plugins |
+| X-Frame-Options | `SAMEORIGIN` | clickjacking |
+| X-Content-Type-Options | `nosniff` | MIME-type sniffing |
+| Referrer-Policy | `strict-origin-when-cross-origin` | leaking URLs to other sites |
+
+CORS is allowed only on `/accounts*`, only from the origins in `CORS_ORIGINS` (default `http://localhost:8080`, never `*`), only for GET/POST/PUT/DELETE, and without credentials.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `FORCE_HTTPS` | `false` | `true` redirects HTTP to HTTPS and sends HSTS. Leave off for local HTTP, tests and in-cluster health probes; turn on when TLS terminates at the app. |
+| `CORS_ORIGINS` | `http://localhost:8080` | comma-separated list of browser origins allowed to call the API |
+| `SECRET_KEY` | placeholder | set from an environment variable or Kubernetes secret in any real deployment |
+
+CI also runs **bandit** (static analysis of the code) and **pip-audit** (known vulnerabilities in dependencies) on every push.
+
+```bash
+curl -I http://localhost:8080      # check the headers yourself
+```
 
 ## Author
 

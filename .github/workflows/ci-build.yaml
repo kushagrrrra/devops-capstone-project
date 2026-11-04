@@ -62,3 +62,25 @@ jobs:
 
       - name: Run unit tests with pytest (PostgreSQL, coverage >= 95%)
         run: pytest
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install scanners
+        run: pip install bandit==1.9.4 pip-audit==2.10.1
+
+      - name: Static code analysis with bandit
+        run: bandit -r service
+
+      - name: Dependency vulnerability scan with pip-audit
+        run: pip-audit -r requirements.txt
