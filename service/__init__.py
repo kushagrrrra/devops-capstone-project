@@ -18,9 +18,11 @@ def create_app(test_config=None):
     # Import inside the factory so blueprints bind to this app instance
     from service.routes import api
     from service.common.error_handlers import register_error_handlers
+    from service.common.security import init_security
 
     app.register_blueprint(api)
     register_error_handlers(app)
+    init_security(app)
 
     logging.basicConfig(
         stream=sys.stdout,
