@@ -1,0 +1,165 @@
+# Tekton Tasks for the accounts CD pipeline (tekton.dev/v1)
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: git-clone
+spec:
+  description: Shallow-clone a Git repository into the "source" workspace.
+  params:
+    - name: url
+      type: string
+    - name: revision
+      type: string
+      default: main
+  workspaces:
+    - name: source
+  results:
+    - name: commit
+      description: Short SHA of the cloned commit
+  steps:
+    - name: clone
+      image: alpine:3.20
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        apk add --no-cache -q git
+        rm -rf src
+        git clone --depth 1 --branch "$(params.revision)" "$(params.url)" src
+        cd src
+        printf "%s" "$(git rev-parse --short HEAD)" > "$(results.commit.path)"
+        echo "Cloned $(params.url) at $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: flake8-lint
+spec:
+  description: Lint the source with flake8 using the project's setup.cfg rules.
+  workspaces:
+    - name: source
+  steps:
+    - name: lint
+      image: python:3.12-slim
+      workingDir: $(workspaces.source.path)/src
+      env:
+        - name: PIP_ROOT_USER_ACTION
+          value: ignore
+        - name: PIP_DISABLE_PIP_VERSION_CHECK
+          value: "1"
+      script: |
+        #!/bin/sh
+        set -eu
+        pip install -q "$(grep -i '^flake8==' requirements.txt)"
+        flake8 service tests --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 service tests --count --statistics
+        echo "flake8: no issues"
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: pytest-test
+spec:
+  description: >-
+    Run the unit tests with coverage (>= 95% enforced by setup.cfg).
+    Uses an in-memory SQLite database so the tests never touch the deployed PostgreSQL.
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: python:3.12-slim
+      workingDir: $(workspaces.source.path)/src
+      env:
+        - name: PIP_ROOT_USER_ACTION
+          value: ignore
+        - name: PIP_DISABLE_PIP_VERSION_CHECK
+          value: "1"
+      script: |
+        #!/bin/sh
+        set -eu
+        pip install -q -r requirements.txt
+        pytest -p no:cacheprovider
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: docker-build
+spec:
+  description: >-
+    Build the image with the node's Docker engine. On Docker Desktop Kubernetes the
+    kubelet uses this same engine, so the image is immediately available to the
+    cluster without a registry. Local development clusters only: access to the
+    Docker socket is root-equivalent on the node.
+  params:
+    - name: image
+      type: string
+    - name: tag
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: build
+      image: docker:29-cli
+      workingDir: $(workspaces.source.path)/src
+      volumeMounts:
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+      script: |
+        #!/bin/sh
+        set -eu
+        docker version --format 'Docker engine {{.Server.Version}}'
+        docker build -t "$(params.image):$(params.tag)" -t "$(params.image):latest" .
+        docker image ls "$(params.image)"
+  volumes:
+    - name: docker-sock
+      hostPath:
+        path: /var/run/docker.sock
+        type: Socket
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: deploy-image
+spec:
+  description: Roll the accounts Deployment out to the newly built image and wait for it.
+  params:
+    - name: deployment
+      type: string
+    - name: container
+      type: string
+    - name: image
+      type: string
+  steps:
+    - name: set-image
+      image: registry.k8s.io/kubectl:v1.36.1
+      command: ["kubectl"]
+      args: ["set", "image", "deployment/$(params.deployment)", "$(params.container)=$(params.image)"]
+    - name: rollout-status
+      image: registry.k8s.io/kubectl:v1.36.1
+      command: ["kubectl"]
+      args: ["rollout", "status", "deployment/$(params.deployment)", "--timeout=180s"]
+    - name: show
+      image: registry.k8s.io/kubectl:v1.36.1
+      command: ["kubectl"]
+      args: ["get", "deployment/$(params.deployment)", "-o", "wide"]
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: smoke-test
+spec:
+  description: Run scripts/smoke_test.py (health, CRUD, security headers) against the deployed Service.
+  params:
+    - name: url
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: smoke
+      image: python:3.12-slim
+      workingDir: $(workspaces.source.path)/src
+      script: |
+        #!/bin/sh
+        set -eu
+        python scripts/smoke_test.py "$(params.url)"

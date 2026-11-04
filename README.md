@@ -167,6 +167,61 @@ kubectl delete -f k8s/
 kubectl delete secret postgres-creds
 ```
 
+## Continuous delivery with Tekton
+
+A Tekton pipeline delivers every change to the cluster:
+
+```
+clone ──► lint ──┐
+      └─► tests ─┴─► build ──► deploy ──► smoke-test
+```
+
+| Task | What it does |
+|------|--------------|
+| `git-clone` | Shallow-clones the repository and publishes the short commit SHA as a result |
+| `flake8-lint` | Runs flake8 with the rules in `setup.cfg` |
+| `pytest-test` | Runs the test suite with the 95% coverage gate (in-memory SQLite, so it never touches the deployed database) |
+| `docker-build` | Builds `accounts:<commit>` with the existing `Dockerfile` |
+| `deploy-image` | `kubectl set image` on the `accounts` Deployment, then waits for the rollout |
+| `smoke-test` | Runs `scripts/smoke_test.py` against the deployed Service |
+
+Files: [`tekton/tasks.yaml`](tekton/tasks.yaml), [`tekton/pipeline.yaml`](tekton/pipeline.yaml), [`tekton/rbac.yaml`](tekton/rbac.yaml) (a `pipeline` ServiceAccount that may only update Deployments in the namespace), and [`tekton/pipelinerun.yaml`](tekton/pipelinerun.yaml).
+
+**Image build on a local cluster.** The build task uses the node's Docker engine through `/var/run/docker.sock`. On Docker Desktop Kubernetes the kubelet uses that same engine, so the new image is available to the Deployment immediately with no registry or credentials. Access to the Docker socket is root-equivalent on the node, so this is only suitable for a local development cluster; for a shared cluster, build with Kaniko or Buildah and push to a registry instead.
+
+Prerequisites: the Kubernetes deployment from the previous section is running.
+
+```bash
+# Install Tekton Pipelines (tested with v1.18.0)
+kubectl apply -f https://infra.tekton.dev/tekton-releases/pipeline/latest/release.yaml
+kubectl wait --for=condition=Ready pods --all -n tekton-pipelines --timeout=300s
+
+# Install the pipeline
+kubectl apply -f tekton/rbac.yaml -f tekton/tasks.yaml -f tekton/pipeline.yaml
+
+# Start a run (creates a uniquely named PipelineRun)
+kubectl create -f tekton/pipelinerun.yaml
+```
+
+Status and logs:
+
+```bash
+kubectl get pipelineruns
+kubectl get taskruns -l tekton.dev/pipelineRun=<run-name> --sort-by=.status.startTime
+kubectl logs -l tekton.dev/pipelineRun=<run-name> --all-containers --prefix
+kubectl get deployment accounts -o wide        # image is now accounts:<commit>
+```
+
+With the [Tekton CLI](https://tekton.dev/docs/cli/) installed, `tkn pipelinerun logs --last -f` shows the same logs.
+
+Clean up:
+
+```bash
+kubectl delete pipelineruns --all
+kubectl delete -f tekton/pipeline.yaml -f tekton/tasks.yaml -f tekton/rbac.yaml
+kubectl delete -f https://infra.tekton.dev/tekton-releases/pipeline/latest/release.yaml   # removes Tekton itself
+```
+
 ## Author
 
 Kushagra Singhal — MTech CSE, VIT Vellore
