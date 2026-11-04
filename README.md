@@ -99,6 +99,74 @@ CI also runs **bandit** (static analysis of the code) and **pip-audit** (known v
 curl -I http://localhost:8080      # check the headers yourself
 ```
 
+## Docker
+
+The [`Dockerfile`](Dockerfile) builds on `python:3.12-slim`, installs `requirements.txt`, copies only the `service/` package, runs as the non-root user `theia`, and starts gunicorn on `0.0.0.0:8080`. Configuration and secrets (`DATABASE_URI`, `SECRET_KEY`) are passed at runtime and are never baked into the image. `.dockerignore` keeps `.git`, virtual environments, tests, evidence and local data out of the build context.
+
+```bash
+docker build -t accounts:1 .
+docker images accounts
+```
+
+Run it against a throwaway PostgreSQL container on a private network (PowerShell shown; the password is generated, not typed):
+
+```powershell
+$pw = -join ((48..57)+(97..122) | Get-Random -Count 24 | ForEach-Object {[char]$_})
+docker network create accounts-net
+docker run -d --name accounts-db --network accounts-net -e POSTGRES_PASSWORD=$pw -e POSTGRES_DB=accounts postgres:15-alpine
+docker run -d --name accounts-app --network accounts-net -p 18080:8080 `
+  -e DATABASE_URI="postgresql+psycopg2://postgres:$pw@accounts-db:5432/accounts" accounts:1
+python scripts/smoke_test.py http://localhost:18080     # health, CRUD and security headers
+docker rm -f accounts-app accounts-db; docker network rm accounts-net
+```
+
+## Kubernetes
+
+Tested on Docker Desktop's built-in single-node cluster (context `docker-desktop`). Because that cluster uses the same Docker engine, the locally built `accounts:1` image is used directly (`imagePullPolicy: IfNotPresent`); no registry push is needed.
+
+| Manifest | Contents |
+|----------|----------|
+| [`k8s/postgres.yaml`](k8s/postgres.yaml) | PostgreSQL 15 Deployment, 1Gi PersistentVolumeClaim, internal `ClusterIP` Service |
+| [`k8s/configmap.yaml`](k8s/configmap.yaml) | Non-secret settings (`FORCE_HTTPS`, `CORS_ORIGINS`, database host and name) |
+| [`k8s/deployment.yaml`](k8s/deployment.yaml) | `accounts` Deployment, 2 replicas, `/health` readiness and liveness probes, init container that waits for PostgreSQL, non-root security context |
+| [`k8s/service.yaml`](k8s/service.yaml) | `LoadBalancer` Service on port 8080 (Docker Desktop publishes it on `localhost`) |
+
+Credentials live in a Secret created from generated values, never in a file:
+
+```powershell
+$pw = -join ((48..57)+(97..122) | Get-Random -Count 24 | ForEach-Object {[char]$_})
+$sk = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 40 | ForEach-Object {[char]$_})
+kubectl create secret generic postgres-creds --from-literal=password=$pw --from-literal=secret-key=$sk
+```
+
+Deploy and check:
+
+```bash
+kubectl apply -f k8s/
+kubectl rollout status deployment/postgres
+kubectl rollout status deployment/accounts
+kubectl get all -l 'app in (accounts,postgres)'
+python scripts/smoke_test.py http://localhost:8080
+```
+
+If something else on your machine already uses port 8080, test through a port-forward instead:
+`kubectl port-forward service/accounts 18081:8080` and `python scripts/smoke_test.py http://localhost:18081`.
+
+Logs and troubleshooting:
+
+```bash
+kubectl logs deployment/accounts                       # app logs
+kubectl logs deployment/accounts -c wait-for-postgres  # init container
+kubectl describe pod -l app=accounts
+```
+
+Clean up everything created for this section:
+
+```bash
+kubectl delete -f k8s/
+kubectl delete secret postgres-creds
+```
+
 ## Author
 
 Kushagra Singhal — MTech CSE, VIT Vellore

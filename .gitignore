@@ -7,3 +7,4 @@ venv/
 htmlcov/
 .pytest_cache/
 evidence/**/*.tmp
+instance/

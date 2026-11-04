@@ -7,6 +7,8 @@ DATABASE_URI = os.getenv(
 
 SQLALCHEMY_DATABASE_URI = DATABASE_URI
 SQLALCHEMY_TRACK_MODIFICATIONS = False
+# Check pooled connections before use so the app survives a database restart
+SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
 
 # Never ship the real key in code; override with an environment variable or a Kubernetes secret.
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")

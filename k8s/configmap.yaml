@@ -1,0 +1,12 @@
+# Non-sensitive settings for the accounts service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: accounts-config
+  labels:
+    app: accounts
+data:
+  FORCE_HTTPS: "false"                      # TLS is not terminated in this local cluster
+  CORS_ORIGINS: "http://localhost:8080"
+  DATABASE_HOST: "postgres"
+  DATABASE_NAME: "accounts"

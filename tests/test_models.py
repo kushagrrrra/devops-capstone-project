@@ -5,6 +5,10 @@ from service.models import Account, DataValidationError
 from tests.factories import AccountFactory
 
 
+def test_pool_pre_ping_enabled(app):
+    assert app.config["SQLALCHEMY_ENGINE_OPTIONS"]["pool_pre_ping"] is True
+
+
 def test_create_account():
     account = AccountFactory()
     account.create()
